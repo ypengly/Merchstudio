@@ -1,0 +1,265 @@
+// MerchStudio — Prisma schema
+// Run `npx prisma migrate dev --name init` from /server after setting DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum PlanTier {
+  FREE
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+enum ProductCategory {
+  TSHIRT
+  HOODIE
+  SWEATSHIRT
+  TOTE_BAG
+  CAP
+  MUG
+}
+
+enum ElementType {
+  TEXT
+  IMAGE
+  SHAPE
+  GRAPHIC
+}
+
+enum TemplateCategory {
+  STREETWEAR
+  BUSINESS
+  EVENTS
+  FASHION
+  FUNNY_CASUAL
+}
+
+enum GraphicCategory {
+  STARS
+  HEARTS
+  ARROWS
+  BADGES
+  ABSTRACT
+  SPORTS
+  TRAVEL
+  MUSIC
+  FOOD
+  ANIMALS
+  DECORATIVE
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// ---------- Core ----------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscription Subscription?
+  designs      Design[]
+  uploads      Upload[]
+  brandKit     BrandKit?
+
+  @@map("users")
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId             String             @unique
+  plan               PlanTier           @default(FREE)
+  status             SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd   DateTime?
+  stripeCustomerId   String?
+  stripeSubscriptionId String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@map("subscriptions")
+}
+
+// ---------- Catalog ----------
+
+model Product {
+  id          String          @id @default(cuid())
+  name        String
+  category    ProductCategory
+  description String?
+  basePrice   Decimal         @default(0) @db.Decimal(10, 2)
+  isEnabled   Boolean         @default(true)
+  designAreaWidth  Int        @default(1000)
+  designAreaHeight Int        @default(1200)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  variants ProductVariant[]
+  designs  Design[]
+
+  @@map("products")
+}
+
+model ProductVariant {
+  id         String  @id @default(cuid())
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId  String
+  colorName  String
+  colorHex   String
+  frontImage String
+  backImage  String?
+  isEnabled  Boolean @default(true)
+
+  designs Design[]
+
+  @@map("product_variants")
+}
+
+// ---------- Designs ----------
+
+model Design {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  product     Product  @relation(fields: [productId], references: [id])
+  productId   String
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  variantId   String?
+  name        String   @default("Untitled design")
+  thumbnailUrl String?
+  isFavorite  Boolean  @default(false)
+  parentDesignId String?
+  parentDesign   Design?  @relation("DesignVariants", fields: [parentDesignId], references: [id])
+  variantsOf     Design[] @relation("DesignVariants")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  elements DesignElement[]
+  versions DesignVersion[]
+  shared   SharedDesign?
+
+  @@index([userId])
+  @@map("designs")
+}
+
+// Full canvas snapshot, saved on demand / autosave checkpoints (undo history, export source of truth)
+model DesignVersion {
+  id        String   @id @default(cuid())
+  design    Design   @relation(fields: [designId], references: [id], onDelete: Cascade)
+  designId  String
+  snapshot  Json
+  label     String?
+  createdAt DateTime @default(now())
+
+  @@index([designId])
+  @@map("design_versions")
+}
+
+// Individual editable layer/object on the canvas (kept normalized so layer list, lock/hide, z-order are queryable)
+model DesignElement {
+  id        String      @id @default(cuid())
+  design    Design      @relation(fields: [designId], references: [id], onDelete: Cascade)
+  designId  String
+  type      ElementType
+  name      String      @default("Layer")
+  zIndex    Int         @default(0)
+  isLocked  Boolean     @default(false)
+  isHidden  Boolean     @default(false)
+  x         Float       @default(0)
+  y         Float       @default(0)
+  width     Float       @default(100)
+  height    Float       @default(100)
+  rotation  Float       @default(0)
+  opacity   Float       @default(1)
+  props     Json        // type-specific: text/font/color, image src/crop, shape/graphic ref, etc.
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([designId])
+  @@map("design_elements")
+}
+
+model Template {
+  id          String           @id @default(cuid())
+  name        String
+  category    TemplateCategory
+  previewUrl  String
+  isPremium   Boolean          @default(false)
+  isEnabled   Boolean          @default(true)
+  snapshot    Json             // starter canvas state cloned into a new Design
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("templates")
+}
+
+model Graphic {
+  id        String          @id @default(cuid())
+  name      String
+  category  GraphicCategory
+  assetUrl  String
+  isPremium Boolean         @default(false)
+  createdAt DateTime        @default(now())
+
+  @@map("graphics")
+}
+
+model Upload {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  url       String
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("uploads")
+}
+
+model BrandKit {
+  id             String   @id @default(cuid())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String   @unique
+  logoUrl        String?
+  primaryColor   String?
+  secondaryColor String?
+  fontFamily     String?
+  updatedAt      DateTime @updatedAt
+
+  @@map("brand_kits")
+}
+
+model SharedDesign {
+  id        String   @id @default(cuid())
+  design    Design   @relation(fields: [designId], references: [id], onDelete: Cascade)
+  designId  String   @unique
+  token     String   @unique @default(cuid())
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("shared_designs")
+}
